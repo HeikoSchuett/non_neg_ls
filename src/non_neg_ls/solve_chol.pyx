@@ -4,7 +4,30 @@ from libc.math cimport sqrt
 
 # Comments to keep track of:
 # - for now perm is only kept for the nonzero entries
+# - in general all values outside of L[perm[:n], perm[:n]] are meaningless,
+#   but not necessarily 0
+# - also the unused half of the triangular matrix is not controlled
 
+
+
+@cython.boundscheck(False)
+@cython.nogil
+@cython.cdivision(True)
+@cython.wraparound(False)
+cpdef remove_rc(double [:,:] L, int [:] perm, int n, int p):
+    """removes a row/column from the decomposition"""
+    cdef int ip, i
+    ip = -1
+    for i in range(n):
+        if perm[i] == p:
+            ip = i
+            break
+    if ip == -1:
+        raise ValueError('The row/column to be removed is not part of L at the moment.')
+    update_chol(L, perm[(ip+1):n], n - ip - 1, L[ip])
+    for i in range(ip, n):
+        perm[i] = perm[i+1]
+    # n = n - 1
 
 
 @cython.boundscheck(False)
@@ -17,7 +40,7 @@ cpdef add_rc(double [:,:] L, int [:] perm, int n, int p, double [:] Acol):
     cdef float sum
     perm[n] = p
     if n > 0:
-        solve_lower(L, perm, n, Acol[:n], L[p, :n])
+        solve_lower(L, perm, n, Acol, L[p, :n])
     sum = Acol[n]
     for i in range(n):
         ip = perm[i]
