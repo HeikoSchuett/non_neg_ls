@@ -23,3 +23,20 @@ class Test_L_calc(TestCase):
         x = np.empty((3), dtype=float)
         solve_upper(L, perm, n, y, x)
         np.testing.assert_allclose(x, [-1.0, -1.0, 2.0])
+
+
+
+class Test_chol(TestCase):
+    def test_chol(self):
+        from non_neg_ls.solve_chol import add_rc
+        import numpy as np
+        X = np.random.rand(20, 4)
+        XTX = X.T @ X
+        Ltrue = np.linalg.cholesky(XTX)
+        L = np.zeros_like(Ltrue)
+        perm = np.arange(4, dtype='int32')
+        n = 0
+        for i in range(4):
+            add_rc(L, perm, n, i, XTX[i,:])
+            n += 1
+        np.testing.assert_allclose(L, Ltrue)
