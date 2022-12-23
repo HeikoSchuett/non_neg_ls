@@ -1,14 +1,152 @@
 # cython language_level=3
+import numpy as np
+import scipy.sparse.linalg
 import cython
+from cpython.mem cimport PyMem_Malloc, PyMem_Realloc, PyMem_Free
 from libc.math cimport sqrt
+cimport numpy as np
+from scipy.linalg.blas import dgemm, dgemv
+# cimport scipy.linalg.cython_blas
+# cimport scipy.linalg.cython_lapack
 
 # Comments to keep track of:
 # - for now perm is only kept for the nonzero entries
 # - in general all values outside of L[perm[:n], perm[:n]] are meaningless,
 #   but not necessarily 0
 # - also the unused half of the triangular matrix is not controlled
+# - at the moment I am loading the blas functions via import not cimport
 
 
+@cython.boundscheck(False)
+@cython.initializedcheck(False)
+@cython.cdivision(True)
+def nn_least_squares(
+    double [:, :] A,
+    double [:] y,
+    double ridge_weight=0,
+    V=None,
+    double eps=100 * np.finfo(float).eps):
+    """ non-negative least squares
+    essentially scipy.optimize.nnls extended to accept a ridge_regression
+    regularisation and/or a covariance matrix V.
+
+    The algorithm is discribed in detail here:
+    Bro, R., & Jong, S. D. (1997). A fast non-negativity-constrained
+    least squares algorithm. Journal of Chemometrics, 11, 9.
+
+    This is an active set algorithm which is somewhat optimized by
+    precomputing A^T V^-1 A and A^T V y such that during the optimization
+    only matricies of rank r need to be inverted.
+
+    Here, I further optimize by computing updating a cholesky decomposition
+    of A^TA, L^T L, which is organized in a matrix of size A^TA and a 
+    permutation vector perm.
+    """
+    cdef double [:] x, y_V_A, s_p, w
+    cdef double [:, :] V_A, ATA, L
+    cdef int n, i_alpha, i, n_max, i_max_w
+    cdef int [:] perm
+    cdef double alpha, alpha_test, max_w
+    n_max = A.shape[1]
+    x = np.zeros(n_max, cython.double)
+    w = np.zeros(n_max, cython.double)
+    p = np.zeros(n_max, bool)
+    ATA = np.empty((n_max, n_max), cython.double)
+    # Initialize L
+    L = np.empty((n_max, n_max), cython.double)
+    perm = np.empty(n_max, int)
+    n = 0
+    if V is None:
+        # w = A.t @ y
+        y_V_A = dgemv(1, A, y, 0, w, 0, 1, 0, 1, 1, 1)
+        w = y_V_A.copy()
+        # ATA = np.matmul(A.T, A) + ridge_weight * np.eye(A.shape[1])
+        ATA = dgemm(1, A, A, 0, ATA, 1, 0, 1)
+        for i in range(n_max):
+            ATA[i, i] += ridge_weight 
+    else:
+        # not yet worked on!
+        for i in range(n_max):
+            V_A[i] = scipy.sparse.linalg.cg(
+                V, A[:, i], atol=10 ** -9)[0]
+        y_V_A = np.matmul(V_A, y)
+        w = y_V_A
+        ATA = np.matmul(V_A, A) + ridge_weight * np.eye(A.shape[1])
+    max_w = -1.0
+    for i in range(n_max):
+        if w[i] > max_w:
+            max_w = w[i]
+            i_max_w = i
+    while max_w > 0:
+        # Update L
+        add_rc(L, perm, n, i_max_w, ATA[i_max_w])
+        n += 1
+        # solve OLS
+        solve_upper(L, perm, n, y_V_A, s_p)
+        solve_lower(L, perm, n, s_p, s_p)
+        while smaller0(s_p, perm, n):
+            alpha = 1
+            i_alpha = -1
+            for i in range(n):
+                alpha_test = x[perm[i]] / (x[perm[i]] - s_p[perm[i]])
+                if alpha_test < alpha:
+                    alpha = alpha_test
+                    i_alpha = perm[i]
+            # alphas = x[p] / (x[p] - s_p)
+            # alphas[s_p > 0] = 1
+            # i_alpha = np.argmin(alphas)
+            # alpha = alphas[i_alpha]
+            for i in range(n):
+                x[perm[i]] = x[perm[i]] + alpha * (s_p[perm[i]] - x[perm[i]])
+            # x[p] = x[p] + alpha * (s_p - x[p])
+            # i_alpha = np.where(p)[0][i_alpha]
+            x[perm[i_alpha]] = 0
+            # remove entry from active set
+            # p[perm[i_alpha] = False
+            remove_rc(L, perm, n, i_alpha)
+            n -= 1
+            solve_upper(L, perm, n, y_V_A, s_p)
+            solve_lower(L, perm, n, s_p, s_p)
+        for i in range(n):
+            x[perm[i]] = s_p[perm[i]]
+        w = dgemv(1, A, y, 0, w, 0, 1, 0, 1, 1, 1)
+        max_w = -1.0
+        for i in range(n_max):
+            w[i] = y_V_A[i] - w[i]
+            if w[i] > max_w:
+                max_w = w[i]
+                i_max_w = i
+    """
+    if V is None:
+        loss = np.sum((y - A @ x) ** 2)
+    else:
+        loss = (y - A @ x).T @ V @ (y - A @ x)
+    """
+    return x #, loss
+
+
+@cython.boundscheck(False)
+@cython.nogil
+@cython.wraparound(False)
+cdef (int, double) find_max(double [:] w, int n_max):
+    cdef int i, i_max_w = 0
+    cdef double max_w = -1.0
+    for i in range(n_max):
+        if w[i] > max_w:
+            max_w = w[i]
+            i_max_w = i
+    return (i_max_w, max_w)
+
+
+@cython.boundscheck(False)
+@cython.nogil
+@cython.wraparound(False)
+cdef int smaller0(double [:] x, int [:] perm, int n):
+    cdef int i
+    for i in range(n):
+        if x[perm[i]] < 0:
+            return 1
+    return 0
 
 @cython.boundscheck(False)
 @cython.nogil
