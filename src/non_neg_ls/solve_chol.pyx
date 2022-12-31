@@ -4,6 +4,7 @@ import scipy.sparse.linalg
 import cython
 from cpython.mem cimport PyMem_Malloc, PyMem_Realloc, PyMem_Free
 from libc.math cimport sqrt
+from libc.stdio cimport printf
 cimport numpy as np
 from scipy.linalg.blas import dgemm, dgemv
 # cimport scipy.linalg.cython_blas
@@ -48,17 +49,18 @@ def nn_least_squares(
     cdef int [:] perm
     cdef double alpha, alpha_test, max_w
     n_max = A.shape[1]
-    x = np.zeros(n_max, cython.double)
-    w = np.zeros(n_max, cython.double)
+    x = np.zeros(n_max, 'float64')
+    w = np.zeros(n_max, 'float64')
+    s_p = np.zeros(n_max, 'float64')
     p = np.zeros(n_max, bool)
-    ATA = np.empty((n_max, n_max), cython.double)
+    ATA = np.empty((n_max, n_max), 'float64')
     # Initialize L
-    L = np.empty((n_max, n_max), cython.double)
-    perm = np.empty(n_max, int)
+    L = np.empty((n_max, n_max), 'float64')
+    perm = np.empty(n_max, 'int32')
     n = 0
     if V is None:
         # w = A.t @ y
-        y_V_A = dgemv(1, A, y, 0, w, 0, 1, 0, 1, 1, 1)
+        y_V_A = dgemv(1, A, y, 0, w, 0, 1, 0, 1, 1, 0)
         w = y_V_A.copy()
         # ATA = np.matmul(A.T, A) + ridge_weight * np.eye(A.shape[1])
         ATA = dgemm(1, A, A, 0, ATA, 1, 0, 1)
@@ -66,6 +68,7 @@ def nn_least_squares(
             ATA[i, i] += ridge_weight 
     else:
         # not yet worked on!
+        V_A = np.empty_like(A)
         for i in range(n_max):
             V_A[i] = scipy.sparse.linalg.cg(
                 V, A[:, i], atol=10 ** -9)[0]
@@ -78,20 +81,36 @@ def nn_least_squares(
             max_w = w[i]
             i_max_w = i
     while max_w > 0:
+        print('\n\n')
+        print(max_w)
         # Update L
         add_rc(L, perm, n, i_max_w, ATA[i_max_w])
         n += 1
+        print('n')
+        print(n)
+        print('ATA')
+        print(np.array(ATA))
+        print('L')
+        print(np.array(L))
+        print('perm')
+        print(np.array(perm))
         # solve OLS
-        solve_upper(L, perm, n, y_V_A, s_p)
-        solve_lower(L, perm, n, s_p, s_p)
+        print('start solve:')
+        solve_lower(L, perm, n, y_V_A, s_p)
+        print('s_p')
+        print(np.array(s_p))
+        solve_upper(L, perm, n, s_p, s_p)
+        print('s_p')
+        print(np.array(s_p))
         while smaller0(s_p, perm, n):
             alpha = 1
             i_alpha = -1
             for i in range(n):
-                alpha_test = x[perm[i]] / (x[perm[i]] - s_p[perm[i]])
-                if alpha_test < alpha:
-                    alpha = alpha_test
-                    i_alpha = perm[i]
+                if s_p[perm[i]] < 0:
+                    alpha_test = x[perm[i]] / (x[perm[i]] - s_p[perm[i]])
+                    if alpha_test < alpha:
+                        alpha = alpha_test
+                        i_alpha = perm[i]
             # alphas = x[p] / (x[p] - s_p)
             # alphas[s_p > 0] = 1
             # i_alpha = np.argmin(alphas)
@@ -105,24 +124,26 @@ def nn_least_squares(
             # p[perm[i_alpha] = False
             remove_rc(L, perm, n, i_alpha)
             n -= 1
-            solve_upper(L, perm, n, y_V_A, s_p)
-            solve_lower(L, perm, n, s_p, s_p)
+            solve_lower(L, perm, n, y_V_A, s_p)
+            solve_upper(L, perm, n, s_p, s_p)
         for i in range(n):
             x[perm[i]] = s_p[perm[i]]
-        w = dgemv(1, A, y, 0, w, 0, 1, 0, 1, 1, 1)
+        w = dgemv(1, ATA, x, 0, w, 0, 1, 0, 1, 1, 1)
         max_w = -1.0
         for i in range(n_max):
             w[i] = y_V_A[i] - w[i]
-            if w[i] > max_w:
+            if (x[i] == 0) and (w[i] > max_w):
                 max_w = w[i]
                 i_max_w = i
+        print('w')
+        print(np.array(w))
     """
     if V is None:
         loss = np.sum((y - A @ x) ** 2)
     else:
         loss = (y - A @ x).T @ V @ (y - A @ x)
     """
-    return x #, loss
+    return np.array(x) #, loss
 
 
 @cython.boundscheck(False)
@@ -169,9 +190,9 @@ cpdef remove_rc(double [:,:] L, int [:] perm, int n, int p):
 
 
 @cython.boundscheck(False)
-@cython.nogil
 @cython.cdivision(True)
 @cython.wraparound(False)
+@cython.nogil
 cpdef add_rc(double [:,:] L, int [:] perm, int n, int p, double [:] Acol):
     """ adds a new row/column to the decomposition """
     cdef int i, ip
@@ -179,7 +200,7 @@ cpdef add_rc(double [:,:] L, int [:] perm, int n, int p, double [:] Acol):
     perm[n] = p
     if n > 0:
         solve_lower(L, perm, n, Acol, L[p, :n])
-    sum = Acol[n]
+    sum = Acol[p]
     for i in range(n):
         ip = perm[i]
         sum -= L[p, ip] * L[p, ip]
@@ -195,11 +216,11 @@ cpdef solve_lower(double [:,:] L, int [:] perm, int n, double [:] y, double [:] 
     cdef double sum
     for i in range(n):
         ip = perm[i]
-        sum = y[i]
+        sum = y[ip]
         for k in range(i):
             kp = perm[k]
             sum -= L[ip, kp] * x[kp]
-        x[i] = sum / L[ip, ip]
+        x[ip] = sum / L[ip, ip]
     # return x
 
 
@@ -212,11 +233,11 @@ cpdef solve_upper(double [:,:] L, int [:] perm, int n, double [:] y, double [:] 
     cdef double sum
     for i in range(n-1, -1, -1):
         ip = perm[i]
-        sum = y[i]
+        sum = y[ip]
         for k in range(n-1, i, -1):
             kp = perm[k]
             sum -= L[kp, ip] * x[kp]
-        x[i] = sum / L[ip, ip]
+        x[ip] = sum / L[ip, ip]
     # return x
 
 
@@ -241,3 +262,25 @@ cpdef update_chol(double [:,:] L, int [:] perm, int n, double [:] x):
     r = sqrt(L[k, k] * L[k, k] + x[k] * x[k])
     L[k, k] = r
 
+
+@cython.boundscheck(False)
+@cython.nogil
+@cython.cdivision(True)
+@cython.wraparound(False)
+cpdef mult_LLT(double [:,:] L, int [:] perm, int n):
+    """ For checking purposes this computes LL^T
+    If the cholesky computations are correct this should give
+    ATA[perm[:n], perm[:n]] at all times
+    """
+    cdef double [:,:] Result = np.zeros((n,n), 'float64')
+    cdef int i, j, k, ip, jp, kp
+    for i in range(n):
+        ip = perm[i]
+        for j in range(n):
+            jp = perm[j]
+            for k in range(n):
+                kp = perm[k]
+                Result[i, j] += L[ip, kp] * L[jp, kp]
+                if k == i or k == j:
+                    break
+    return np.array(Result)

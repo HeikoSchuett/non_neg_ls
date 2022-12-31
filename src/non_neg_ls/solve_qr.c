@@ -3,6 +3,9 @@
 /* BEGIN: Cython Metadata
 {
     "distutils": {
+        "include_dirs": [
+            "/private/var/folders/vj/98fbkrk57kj7wx5xr07vbj9h0000gn/T/pip-build-env-5t5cxjwn/overlay/lib/python3.10/site-packages/numpy/core/include"
+        ],
         "name": "non_neg_ls.solve_qr",
         "sources": [
             "src/non_neg_ls/solve_qr.pyx"

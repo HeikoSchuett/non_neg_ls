@@ -1,1 +1,1 @@
-from solve_chol import *
+from non_neg_ls.solve_chol import *
