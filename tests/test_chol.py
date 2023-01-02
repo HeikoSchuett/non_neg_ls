@@ -51,13 +51,27 @@ class Test_chol(TestCase):
         for i in range(4):
             add_rc(L, perm, n, i, XTX[i, :])
             n += 1
-        np.testing.assert_allclose(L, Ltrue,  rtol=10**-5)
+        np.testing.assert_allclose(L, Ltrue,  atol=10**-5)
 
     def test_chol_mult(self):
         from non_neg_ls import add_rc, mult_LLT
         import numpy as np
         X = np.random.rand(20, 4)
         XTX = X.T @ X
+        L = np.zeros((4, 4), float)
+        perm = np.arange(4, dtype='int32')
+        n = 0
+        for i in range(4):
+            add_rc(L, perm, n, i, XTX[i, :])
+            n += 1
+        r = mult_LLT(L, perm, n)
+        np.testing.assert_allclose(r, XTX)
+    
+    def test_update_chol(self):
+        from non_neg_ls import add_rc, mult_LLT, update_chol
+        import numpy as np
+        X = np.random.rand(20, 4)
+        XTX = X[:19].T @ X[:19]
         Ltrue = np.linalg.cholesky(XTX)
         L = np.zeros_like(Ltrue)
         perm = np.arange(4, dtype='int32')
@@ -65,7 +79,9 @@ class Test_chol(TestCase):
         for i in range(4):
             add_rc(L, perm, n, i, XTX[i, :])
             n += 1
+        update_chol(L, perm, n, X[19])
         r = mult_LLT(L, perm, n)
+        XTX = X.T @ X
         np.testing.assert_allclose(r, XTX)
 
 
@@ -77,3 +93,24 @@ class Test_nn_ls(TestCase):
         y = np.ones(20, float)
         x = non_neg_ls.nn_least_squares(A, y)
         assert len(x) == 4
+
+    def test_small_rand(self):
+        import numpy as np
+        import non_neg_ls
+        from scipy.optimize import nnls
+        A = np.random.rand(20, 4)
+        y = np.ones(20, float)
+        x = non_neg_ls.nn_least_squares(A, y)
+        x_scipy, y_scipy = nnls(A, y)
+        np.testing.assert_array_almost_equal(x, x_scipy)
+
+    def test_rand(self):
+        import numpy as np
+        from non_neg_ls import nn_least_squares
+        from scipy.optimize import nnls
+        for N in np.arange(10, 100, 10):
+            A = np.random.rand(3 * N, N)
+            y = np.ones(3 * N)
+            x_scipy = nnls(A, y)
+            x_chol = nn_least_squares(A, y)
+            np.testing.assert_array_almost_equal(x_chol, x_scipy[0])

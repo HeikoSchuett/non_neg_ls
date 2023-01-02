@@ -81,27 +81,12 @@ def nn_least_squares(
             max_w = w[i]
             i_max_w = i
     while max_w > 0:
-        print('\n\n')
-        print(max_w)
         # Update L
         add_rc(L, perm, n, i_max_w, ATA[i_max_w])
         n += 1
-        print('n')
-        print(n)
-        print('ATA')
-        print(np.array(ATA))
-        print('L')
-        print(np.array(L))
-        print('perm')
-        print(np.array(perm))
         # solve OLS
-        print('start solve:')
         solve_lower(L, perm, n, y_V_A, s_p)
-        print('s_p')
-        print(np.array(s_p))
         solve_upper(L, perm, n, s_p, s_p)
-        print('s_p')
-        print(np.array(s_p))
         while smaller0(s_p, perm, n):
             alpha = 1
             i_alpha = -1
@@ -135,8 +120,6 @@ def nn_least_squares(
             if (x[i] == 0) and (w[i] > max_w):
                 max_w = w[i]
                 i_max_w = i
-        print('w')
-        print(np.array(w))
     """
     if V is None:
         loss = np.sum((y - A @ x) ** 2)
@@ -245,22 +228,37 @@ cpdef solve_upper(double [:,:] L, int [:] perm, int n, double [:] y, double [:] 
 @cython.nogil
 @cython.cdivision(True)
 @cython.wraparound(False)
-cpdef update_chol(double [:,:] L, int [:] perm, int n, double [:] x):
+cpdef update_chol(double [:,:] L, int [:] perm, int n, double [:] x_in):
+    """ implementing the cholesky update in Algorithm 3.1 of
+    Krause, O., & Igel, C. (2015). 
+    A More Efficient Rank-one Covariance Matrix Update for Evolution Strategies. 
+    Proceedings of the 2015 ACM Conference on Foundations of Genetic Algorithms XIII,
+    129–136. https://doi.org/10.1145/2725494.2725496
+
+    for alpha=1, beta=1, i.e. just adding a vector.
+    """
     cdef int k, kp, i, ip
-    cdef double r, c, s
-    for kp in range(n-1):
-        k = perm[kp]
-        r = sqrt(L[k, k] * L[k, k] + x[k] * x[k])
-        c = r / L[k, k]
-        s = x[k] / L[k, k]
-        L[k, k] = r
-        for ip in range(k+1, n+1):
-            i = perm[ip]
-            L[i, k] = (L[i, k] + s * x[i]) / c
-            x[i] = c * x[i] - s * L[i, k]
-    k = perm[n]
-    r = sqrt(L[k, k] * L[k, k] + x[k] * x[k])
-    L[k, k] = r
+    cdef double c, b, g, ll, xx, r
+    cdef double [:] x
+    x = x_in.copy()
+    b = 1.0
+    for k in range(n-1):
+        kp = perm[k]
+        ll = L[kp, kp] * L[kp, kp]
+        xx = x[kp] * x[kp]
+        r = sqrt(ll + (xx / b))
+        g = ll * b + xx
+        c = r / L[kp, kp]
+        for i in range(k+1, n):
+            ip = perm[i]
+            x[ip] = x[ip] - x[kp] * L[ip, kp] / L[kp, kp]
+            L[ip, kp] = (L[ip, kp] * c) + (x[ip] * x[kp] * r / g)
+        L[kp, kp] = r
+        b += xx / ll
+    kp = perm[n-1]
+    ll = L[kp, kp] * L[kp, kp]
+    xx = x[kp] * x[kp]
+    L[kp, kp] = sqrt(ll + (xx / b))
 
 
 @cython.boundscheck(False)
