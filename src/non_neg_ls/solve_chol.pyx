@@ -3,12 +3,13 @@ import numpy as np
 import scipy.sparse.linalg
 import cython
 from cpython.mem cimport PyMem_Malloc, PyMem_Realloc, PyMem_Free
-from libc.math cimport sqrt
+from libc.math cimport sqrt, abs
 from libc.stdio cimport printf
 cimport numpy as np
 from scipy.linalg.blas import dgemm, dgemv
 # cimport scipy.linalg.cython_blas
 # cimport scipy.linalg.cython_lapack
+from numpy.testing import assert_allclose
 
 # Comments to keep track of:
 # - for now perm is only kept for the nonzero entries
@@ -26,7 +27,7 @@ def nn_least_squares(
     double [:] y,
     double ridge_weight=0,
     V=None,
-    double eps=100 * np.finfo(float).eps):
+    double eps=10**-6):
     """ non-negative least squares
     essentially scipy.optimize.nnls extended to accept a ridge_regression
     regularisation and/or a covariance matrix V.
@@ -45,9 +46,9 @@ def nn_least_squares(
     """
     cdef double [:] x, y_V_A, s_p, w
     cdef double [:, :] V_A, ATA, L
-    cdef int n, i_alpha, i, n_max, i_max_w
+    cdef int n, i_alpha, i, n_max, i_max_w, ip
     cdef int [:] perm
-    cdef double alpha, alpha_test, max_w
+    cdef double alpha, alpha_test, max_w, max_w0
     n_max = A.shape[1]
     x = np.zeros(n_max, 'float64')
     w = np.zeros(n_max, 'float64')
@@ -76,11 +77,12 @@ def nn_least_squares(
         w = y_V_A
         ATA = np.matmul(V_A, A) + ridge_weight * np.eye(A.shape[1])
     max_w = -1.0
+    max_w0 = 0
     for i in range(n_max):
         if w[i] > max_w:
             max_w = w[i]
             i_max_w = i
-    while max_w > 0:
+    while max_w > eps:
         # Update L
         add_rc(L, perm, n, i_max_w, ATA[i_max_w])
         n += 1
@@ -88,6 +90,7 @@ def nn_least_squares(
         solve_lower(L, perm, n, y_V_A, s_p)
         solve_upper(L, perm, n, s_p, s_p)
         while smaller0(s_p, perm, n):
+            # print('smaller 0 happend!\n')
             alpha = 1
             i_alpha = -1
             for i in range(n):
@@ -95,13 +98,19 @@ def nn_least_squares(
                     alpha_test = x[perm[i]] / (x[perm[i]] - s_p[perm[i]])
                     if alpha_test < alpha:
                         alpha = alpha_test
-                        i_alpha = perm[i]
+                        i_alpha = i
+            # print(n)
+            # print(np.array(perm))
+            # print(np.array(s_p))
+            # print(alpha)
+            # print(i_alpha)
             # alphas = x[p] / (x[p] - s_p)
             # alphas[s_p > 0] = 1
             # i_alpha = np.argmin(alphas)
             # alpha = alphas[i_alpha]
             for i in range(n):
-                x[perm[i]] = x[perm[i]] + alpha * (s_p[perm[i]] - x[perm[i]])
+                ip = perm[i]
+                x[ip] = x[ip] + alpha * (s_p[ip] - x[ip])
             # x[p] = x[p] + alpha * (s_p - x[p])
             # i_alpha = np.where(p)[0][i_alpha]
             x[perm[i_alpha]] = 0
@@ -109,17 +118,31 @@ def nn_least_squares(
             # p[perm[i_alpha] = False
             remove_rc(L, perm, n, i_alpha)
             n -= 1
+            assert_allclose(
+                mult_LLT(L, perm, n),
+                np.array(ATA)[np.array(perm[:n])][:, np.array(perm[:n])],
+                err_msg='Cholesky invalid!',
+                rtol=1e-05
+            )
             solve_lower(L, perm, n, y_V_A, s_p)
             solve_upper(L, perm, n, s_p, s_p)
         for i in range(n):
             x[perm[i]] = s_p[perm[i]]
         w = dgemv(1, ATA, x, 0, w, 0, 1, 0, 1, 1, 1)
         max_w = -1.0
+        max_w0 = 0
         for i in range(n_max):
             w[i] = y_V_A[i] - w[i]
             if (x[i] == 0) and (w[i] > max_w):
                 max_w = w[i]
                 i_max_w = i
+            elif x[i] > 0 and (abs(w[i]) > max_w0):
+                max_w0 = abs(w[i])
+        # print('')
+        # print(max_w0)
+        # print('')
+        if max_w0 > 0.0001:
+            raise AssertionError('Not at a local minimum! max_w0 = %d' % max_w0)
     """
     if V is None:
         loss = np.sum((y - A @ x) ** 2)
@@ -156,19 +179,15 @@ cdef int smaller0(double [:] x, int [:] perm, int n):
 @cython.nogil
 @cython.cdivision(True)
 @cython.wraparound(False)
-cpdef remove_rc(double [:,:] L, int [:] perm, int n, int p):
+cpdef remove_rc(double [:,:] L, int [:] perm, int n, int ip):
     """removes a row/column from the decomposition"""
-    cdef int ip, i
-    ip = -1
-    for i in range(n):
-        if perm[i] == p:
-            ip = i
-            break
-    if ip == -1:
+    cdef int i
+    if ip >= n:
         raise ValueError('The row/column to be removed is not part of L at the moment.')
-    update_chol(L, perm[(ip+1):n], n - ip - 1, L[ip])
-    for i in range(ip, n):
-        perm[i] = perm[i+1]
+    elif ip < n - 1:
+        update_chol(L, perm[(ip+1):n], n - ip - 1, L[:, perm[ip]])
+        for i in range(ip, n-1):
+            perm[i] = perm[i+1]
     # n = n - 1
 
 
@@ -179,7 +198,7 @@ cpdef remove_rc(double [:,:] L, int [:] perm, int n, int p):
 cpdef add_rc(double [:,:] L, int [:] perm, int n, int p, double [:] Acol):
     """ adds a new row/column to the decomposition """
     cdef int i, ip
-    cdef float sum
+    cdef double sum
     perm[n] = p
     if n > 0:
         solve_lower(L, perm, n, Acol, L[p, :n])
