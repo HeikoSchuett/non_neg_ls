@@ -1,4 +1,5 @@
-# cython language_level=3
+# cython: language_level=3
+# cython: profile=True
 import numpy as np
 import scipy.sparse.linalg
 import cython
@@ -118,12 +119,12 @@ def nn_least_squares(
             # p[perm[i_alpha] = False
             remove_rc(L, perm, n, i_alpha)
             n -= 1
-            assert_allclose(
-                mult_LLT(L, perm, n),
-                np.array(ATA)[np.array(perm[:n])][:, np.array(perm[:n])],
-                err_msg='Cholesky invalid!',
-                rtol=1e-05
-            )
+            #assert_allclose(
+            #    mult_LLT(L, perm, n),
+            #    np.array(ATA)[np.array(perm[:n])][:, np.array(perm[:n])],
+            #    err_msg='Cholesky invalid!',
+            #    rtol=1e-05
+            #)
             solve_lower(L, perm, n, y_V_A, s_p)
             solve_upper(L, perm, n, s_p, s_p)
         for i in range(n):
@@ -195,7 +196,7 @@ cpdef remove_rc(double [:,:] L, int [:] perm, int n, int ip):
 @cython.cdivision(True)
 @cython.wraparound(False)
 @cython.nogil
-cpdef add_rc(double [:,:] L, int [:] perm, int n, int p, double [:] Acol):
+cpdef void add_rc(double [:,:] L, int [:] perm, int n, int p, double [:] Acol):
     """ adds a new row/column to the decomposition """
     cdef int i, ip
     cdef double sum
@@ -213,7 +214,7 @@ cpdef add_rc(double [:,:] L, int [:] perm, int n, int p, double [:] Acol):
 @cython.nogil
 @cython.cdivision(True)
 @cython.wraparound(False)
-cpdef solve_lower(double [:,:] L, int [:] perm, int n, double [:] y, double [:] x):
+cpdef void solve_lower(double [:,:] L, int [:] perm, int n, double [:] y, double [:] x):
     cdef int i, ip, k, kp
     cdef double sum
     for i in range(n):
@@ -230,7 +231,7 @@ cpdef solve_lower(double [:,:] L, int [:] perm, int n, double [:] y, double [:] 
 @cython.nogil
 @cython.cdivision(True)
 @cython.wraparound(False)
-cpdef solve_upper(double [:,:] L, int [:] perm, int n, double [:] y, double [:] x):
+cpdef void solve_upper(double [:,:] L, int [:] perm, int n, double [:] y, double [:] x):
     cdef int i, ip, k, kp
     cdef double sum
     for i in range(n-1, -1, -1):
@@ -247,7 +248,7 @@ cpdef solve_upper(double [:,:] L, int [:] perm, int n, double [:] y, double [:] 
 @cython.nogil
 @cython.cdivision(True)
 @cython.wraparound(False)
-cpdef update_chol(double [:,:] L, int [:] perm, int n, double [:] x_in):
+cpdef void update_chol(double [:,:] L, int [:] perm, int n, double [:] x_in):
     """ implementing the cholesky update in Algorithm 3.1 of
     Krause, O., & Igel, C. (2015). 
     A More Efficient Rank-one Covariance Matrix Update for Evolution Strategies. 

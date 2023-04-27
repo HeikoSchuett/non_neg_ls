@@ -24,11 +24,14 @@ def run_test(Ns=[100, 500], method='scipy'):
     return times
 
 
-def make_plot(Ns=np.arange(10, 100, 10)):
+def make_plot(Ns=np.arange(25, 500, 25)):
     """ basic timing plot
     """
     methods = ['scipy', 'fnnls', 'chol', 'ols']
     times = np.zeros((len(methods), len(Ns)))
     for im, m in enumerate(methods):
         times[im] = run_test(Ns, m)
-    plt.loglog(Ns, times)
+    plt.loglog(Ns, times.T)
+    plt.legend(methods)
+    plt.xlabel('Number of Predictors')
+    plt.ylabel('Time per run [s]')
